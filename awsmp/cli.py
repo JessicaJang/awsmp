@@ -8,8 +8,10 @@ from typing import Dict, List, Optional, TextIO
 
 import click
 import prettytable
+import pprint
 import yaml
 from botocore.exceptions import ClientError
+from yaml.dumper import SafeDumper
 
 from . import _driver, models
 from .errors import (
@@ -64,7 +66,7 @@ def entity_list(entity_type, filter_visibility):
     for _, entity in entity_list.items():
         if not filter_visibility or entity["Visibility"] in filter_visibility:
             t.add_row([entity["EntityId"], entity["Name"], entity["Visibility"], entity["LastModifiedDate"]])
-    print(t.get_string(sortby="last-changed"))
+    print(t.get_string(sortby="name"))
 
 
 @inspect.command("entity-show", help="Show a specific entity")
@@ -101,6 +103,27 @@ def entity_versions_list(entity_id):
     for v in versions:
         t.add_row([v["CreationDate"], v["Id"], v["VersionTitle"]])
     print(t.get_string(sortby="CreationDate"))
+
+
+@inspect.command("entity-latest-version")
+@click.argument("entity-id")
+def entity_get_latest_version(entity_id):
+    """
+    List latest version for a provided entity id.
+    """
+    versions = _driver.get_entity_versions(entity_id)
+    latest_version = sorted(versions, key=lambda x: x["CreationDate"])[-1]
+    extracted_data = {
+        "CreationData": latest_version["CreationDate"],
+        "VersionTitle": latest_version["VersionTitle"],
+        "Image": latest_version["Sources"][0]["Image"],
+        "Arch": latest_version["Sources"][0]["Architecture"],
+        "OS": latest_version["Sources"][0]["OperatingSystem"],
+        "Instructions": latest_version["DeliveryMethods"][0]["Instructions"],
+        "Instructions": latest_version["DeliveryMethods"][0]["Recommendations"],
+    }
+
+    print(json.dumps(extracted_data, indent=2))
 
 
 @inspect.command("entity-diff")
@@ -441,6 +464,49 @@ def ami_product_update(product_id: str, config: TextIO, allow_price_change: bool
     if response:
         print(f'ChangeSet created (ID: {response["ChangeSetId"]})')
         print(f'https://aws.amazon.com/marketplace/management/requests/{response["ChangeSetId"]}')
+
+
+
+class IndentListDumper(SafeDumper):
+    def increase_indent(self, flow=False, indentless=False):
+        return super().increase_indent(flow, False)
+
+def literal_str_representer(dumper, data):
+    text = data if data.endswith('\n') else data + '\n'
+    return dumper.represent_scalar('tag:yaml.org,2002:str', text, style='|')
+
+
+@public_offer.command("download")
+@click.option("--product-id", required=True, prompt=True, help="Product id of the listing")
+@click.option("--config", type=click.File("w+"), required=True, prompt=True, help="File path of local configuration file")
+def ami_product_download(product_id: str, config: TextIO) -> None:
+    """
+    Download YAML local configuration from AWS Marketplace live listing.
+    """
+
+    # Get product specific details
+    listing_resp = _driver.get_entity_details(product_id)
+    # Remove version output except latest version
+    versions = listing_resp["Versions"]
+    latest_version = sorted(versions, key=lambda x: x["CreationDate"])[-1]
+    listing_resp["Versions"] = latest_version
+
+    # Get offer specific details
+    offer_id = _driver.get_public_offer_id(product_id)
+    listing_offer_resp = _driver.get_entity_details(offer_id)
+
+    # filtering required term details only
+    listing_resp["Terms"] = []
+    term_order = {"SupportTerm": 0, "UsageBasedPricingTerm": 1, "ConfigurableUpfrontPricingTerm": 2}
+    if "Terms" in listing_offer_resp:
+        listing_resp["Terms"] = sorted(
+            [term for term in listing_offer_resp.get("Terms", []) if term["Type"] in term_order],
+            key=lambda x: term_order.get(x["Type"], 3),
+        )
+    yaml.add_representer(models.LiteralString, literal_str_representer, Dumper=IndentListDumper)
+    yaml_config = models.EntityModel(**listing_resp)._get_yaml_from_entity()
+    yaml.dump(yaml_config, config, Dumper=IndentListDumper, default_flow_style=False, indent=2, sort_keys=False)
+    print(f"{config.name} has been successfully written")
 
 
 def _load_configuration(config_path: TextIO, required_fields: List[List[str]]) -> Dict:

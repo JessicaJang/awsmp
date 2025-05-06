@@ -184,152 +184,112 @@ class TestInstanceTypePricing:
         assert "must have at most 3 decimal places" in str(e.value)
 
 
-class TestEulaDocumentItem:
+class TestDescriptionModel:
     @pytest.mark.parametrize(
-        "eula_item,expected_url,expected_version",
+        "key, expected",
         [
-            ({"type": "CustomEula", "url": "https://eula.com"}, "https://eula.com", None),
-            ({"type": "StandardEula", "version": "2022-07-14"}, None, "2022-07-14"),
+            ("product_title", "test"),
+            ("short_description", "test_short_description"),
+            ("long_description", "test_long_description\n"),
+            ("sku", "test"),
+            ("highlights", ["test_highlight_1"]),
+            ("search_keywords", ["test_keyword_1"]),
+            ("categories", ["Migration"]),
         ],
     )
-    def test_eula_document_item(self, eula_item, expected_url, expected_version):
-        model = models.EulaDocumentItem(**eula_item)
-        assert model.url == expected_url and model.version == expected_version
+    def test_get_yaml_product_title(self, key, expected):
+        data = {
+            "ProductTitle": "test",
+            "ProductCode": "prod-test",
+            "ShortDescription": "test_short_description",
+            "Manufacturer": "",
+            "LongDescription": "test_long_description\n",
+            "Sku": "test",
+            "Highlights": ["test_highlight_1"],
+            "AssociatedProducts": "",
+            "SearchKeywords": ["test_keyword_1"],
+            "Visibility": "Public",
+            "ProductState": "Active",
+            "Categories": ["Migration"],
+        }
+        description_model = models.DescriptionModel(**data)
+        yaml_description = description_model._to_yaml()
 
+        assert yaml_description.get(key) == expected
+
+
+class TestPromotionalResourcesModel:
     @pytest.mark.parametrize(
-        "eula_item,expected_error_msg",
+        "key, expected",
         [
-            (
-                {"type": "CustomEula", "url": "https://eula.com", "version": "2024-05-07"},
-                "CustomEula can't pass version",
-            ),
-            ({"type": "StandardEula", "url": "https://eula.com"}, "StandardEula cannot have a custom document Url."),
-            ({"type": "CustomEula"}, "CustomEula needs Url."),
-            ({"type": "StandardEula"}, "Specify version of StandardEula"),
+            ("logo_url", HttpUrl("https://test-logourl")),
+            ("video_urls", [HttpUrl("https://test-video-url")]),
+            ("additional_resources", [{"test-link": "https://test-url/"}]),
         ],
     )
-    def test_eula_document_item_required_field_check_by_type(self, eula_item, expected_error_msg):
-        with pytest.raises(ValidationError) as e:
-            models.EulaDocumentItem(**eula_item)
-        assert expected_error_msg in str(e.value)
-
-
-class TestOffer:
-    def _get_offer_details(self):
-        return {
-            "eula_document": [{"type": "CustomEula", "url": "https://eula.com"}],
-            "instance_types": [
-                {"name": "c3.medium", "hourly": 0.012, "yearly": 57.528},
-                {"name": "c4.large", "hourly": 0.078, "yearly": 123.456},
-            ],
-            "refund_policy": "This is refund policy",
-        }
-
-    def test_refund_policy_from_offer(self):
-        model = models.Offer(**self._get_offer_details())
-        assert model.refund_policy == "This is refund policy"
-
-    def test_invalid_refund_policy_from_offer_too_long(self):
-        offer_detail = self._get_offer_details()
-        offer_detail["refund_policy"] = "refund policy" * 50
-        with pytest.raises(ValidationError):
-            models.Offer(**offer_detail)
-
-    def test_eula_document_from_offer(self):
-        model = models.Offer(**self._get_offer_details())
-        assert model.eula_document[0].url == "https://eula.com"
-
-    def test_invalid_eula_document_from_offer_with_version(self):
-        offer_detail = self._get_offer_details()
-        offer_detail["eula_document"][0]["version"] = "2025-02-04"
-        with pytest.raises(ValidationError):
-            models.Offer(**offer_detail)
-
-    def test_instance_type_and_pricing_from_offer(self):
-        model = models.Offer(**self._get_offer_details())
-        assert model.instance_types[1].name == "c4.large" and str(model.instance_types[1].price_annual) == "123.456"
-
-    def test_invalid_instance_type_and_pricing_without_pricing(self):
-        offer_detail = self._get_offer_details()
-        offer_detail["instance_types"][1] = {"name": "c4.large"}
-        with pytest.raises(ValidationError):
-            models.Offer(**offer_detail)
-
-    def test_monthly_subscription_fee(self):
-        offer_detail = self._get_offer_details()
-        offer_detail["monthly_subscription_fee"] = 50.04
-
-        model = models.Offer(**offer_detail)
-        assert str(model.monthly_subscription_fee) == "50.04"
-
-    def test_invalid_monthly_subscription_fee(self):
-        offer_detail = self._get_offer_details()
-        offer_detail["monthly_subscription_fee"] = 50.01234
-        with pytest.raises(ValidationError) as e:
-            models.Offer(**offer_detail)
-
-        assert "must have at most 3 decimal places" in str(e.value)
-
-
-class TestPricingTermModel:
-    def test_pricing_term_model_hourly(self):
+    def test_get_yaml(self, key, expected):
         data = {
-            "Type": "UsageBasedPricingTerm",
-            "CurrencyCode": "USD",
-            "RateCards": [
-                {
-                    "RateCard": [
-                        {"DimensionKey": "c1.medium", "Price": "0.004"},
-                        {"DimensionKey": "c1.xlarge", "Price": "0.014"},
-                        {"DimensionKey": "c3.2xlarge", "Price": "0.014"},
-                        {"DimensionKey": "c3.4xlarge", "Price": "0.028"},
-                    ]
-                }
-            ],
+            "LogoUrl": "https://test-logourl",
+            "Videos": ["https://test-video-url"],
+            "AdditionalResources": [{"Type": "Link", "Text": "test-link", "Url": "https://test-url"}],
         }
-        term = models.PricingTermModel(**data)  #  type: ignore
-        assert term.RateCards[0].RateCard[1].DimensionKey == "c1.xlarge"
+        promotional_resources_model = models.PromotionalResourcesModel(**data)
+        yaml_promotional_resources = promotional_resources_model._to_yaml()
 
-    def test_pricing_term_model_annual(self):
-        data = {
-            "Type": "ConfigurableUpfrontPricingTerm",
-            "CurrencyCode": "USD",
-            "RateCards": [
-                {
-                    "Selector": {"Type": "Duration", "Value": "P365D"},
-                    "Constraints": {"MultipleDimensionSelection": "Allowed", "QuantityConfiguration": "Allowed"},
-                    "RateCard": [
-                        {"DimensionKey": "c1.medium", "Price": "24.0"},
-                        {"DimensionKey": "c1.xlarge", "Price": "98.0"},
-                        {"DimensionKey": "c3.2xlarge", "Price": "98.0"},
-                        {"DimensionKey": "c3.4xlarge", "Price": "196.0"},
-                    ],
-                }
-            ],
-        }
-        term = models.PricingTermModel(**data)  #  type: ignore
-        selector = cast(models.SelectorModel, term.RateCards[0].Selector)
-        assert term.RateCards[0].RateCard[1].DimensionKey == "c1.xlarge" and selector.Value == "P365D"
+        assert yaml_promotional_resources.get(key) == expected
 
-    def test_invalid_pricing_term_model(self):
+
+class TestSupportInformationModel:
+    @pytest.mark.parametrize(
+        "key, expected",
+        [
+            ("support_description", "test_support_description"),
+            ("support_resources", ["https://test_support_url"]),
+        ],
+    )
+    def test_get_yaml(self, key, expected):
         data = {
-            "Type": "ConfigurableUpfrontPricingTerm",
-            "CurrencyCode": "USD",
-            "RateCards": [
-                {
-                    "Selector": {"Type": "Duration", "Value": "P365D"},
-                    "Constraints": {"MultipleDimensionSelection": "Allowed"},
-                    "RateCard": [
-                        {"DimensionKey": "c1.medium", "Price": "24.0"},
-                        {"DimensionKey": "c1.xlarge", "Price": "98.0"},
-                        {"DimensionKey": "c3.2xlarge", "Price": "98.0"},
-                        {"DimensionKey": "c3.4xlarge", "Price": "196.0"},
-                    ],
-                }
-            ],
+            "Description": "test_support_description",
+            "Resources": ["https://test_support_url"],
         }
-        with pytest.raises(ValidationError) as e:
-            models.PricingTermModel(**data)  #  type: ignore
+        support_information_model = models.SupportInformationModel(**data)
+        yaml_support_information = support_information_model._to_yaml()
+
+        assert yaml_support_information.get(key) == expected
+
+
+class TestRegionAvailabilityModel:
+    @pytest.mark.parametrize(
+        "key, expected",
+        [
+            ("commercial_regions", ["us-east-1", "us-east-2"]),
+            ("future_region_support", True),
+        ],
+    )
+    def test_get_yaml(self, key, expected):
+        data = {
+            "Regions": ["us-east-1", "us-east-2"],
+            "FutureRegionSupport": "All",
+        }
+        support_information_model = models.RegionAvailabilityModel(**data)
+        yaml_support_information = support_information_model._to_yaml()
+        assert yaml_support_information.get(key) == expected
+
+    @pytest.mark.parametrize(
+        "key, expected",
+        [
+            ("commercial_regions", ["us-east-1", "us-east-2"]),
+            ("future_region_support", False),
+        ],
+    )
+    def test_get_yaml_future_region_false(self, key, expected):
+        data = {
+            "Regions": ["us-east-1", "us-east-2"],
+            "FutureRegionSupport": "",
+        }
+        support_information_model = models.RegionAvailabilityModel(**data)
+        yaml_support_information = support_information_model._to_yaml()
+        assert yaml_support_information.get(key) == expected
 
 
 class TestEntity:
@@ -723,3 +683,85 @@ class TestEntity:
         entity1, entity2 = get_entity
         entity2.Terms[index] = custom_config
         assert entity1.get_diff(entity2) == expected_diff
+
+    def test_convert_terms_to_yaml_refund_policy(self, mock_boto3, get_entity):
+        entity1, entity2 = get_entity
+
+        res = entity1._convert_terms_to_yaml()
+        assert res["refund_policy"] == "test_refund_policy_term\n"
+
+    @pytest.mark.parametrize(
+        "instance_type, hourly, yearly",
+        [
+            ("a1.large", "0.004", "24.528"),
+            ("a1.xlarge", "0.007", "49.056"),
+        ],
+    )
+    def test_convert_terms_to_yaml_instance_types(self, mock_boto3, get_entity, instance_type, hourly, yearly):
+        entity1, entity2 = get_entity
+
+        res = entity1._convert_terms_to_yaml()
+
+        for pricing in res["instance_types"]:
+            if pricing["name"] == instance_type:
+                assert pricing["yearly"] == yearly and pricing["hourly"] == hourly
+
+    @pytest.mark.parametrize(
+        "key, expected",
+        [
+            ("product_title", "test"),
+            ("short_description", "test_short_description"),
+            ("search_keywords", ["test_keyword_1"]),
+            ("logo_url", HttpUrl("https://test-logourl")),
+            ("support_description", "test_support_description"),
+            ("additional_resources", [{"test-link": "https://test-url/"}]),
+        ],
+    )
+    def test_entity_to_yaml_description(self, key, expected):
+        with open("./tests/test_config.json", "r") as f:
+            response_json = json.load(f)
+
+        entity_model = models.EntityModel(**response_json)
+        yaml_config = entity_model._get_yaml_from_entity()
+        assert yaml_config["product"]["description"][key] == expected
+
+    @pytest.mark.parametrize(
+        "key, expected",
+        [("commercial_regions", ["us-east-1", "us-east-2"]), ("future_region_support", True)],
+    )
+    def test_entity_to_yaml_region(self, key, expected):
+        with open("./tests/test_config.json", "r") as f:
+            response_json = json.load(f)
+
+        entity_model = models.EntityModel(**response_json)
+        yaml_config = entity_model._get_yaml_from_entity()
+        assert yaml_config["product"]["region"][key] == expected
+
+    @pytest.mark.parametrize(
+        "key, expected",
+        [
+            ("refund_policy", "test_refund_policy_term\n"),
+            (
+                "instance_types",
+                [
+                    {"name": "a1.large", "hourly": "0.004", "yearly": "24.528"},
+                    {"name": "a1.xlarge", "hourly": "0.007", "yearly": "49.056"},
+                ],
+            ),
+        ],
+    )
+    def test_entity_to_yaml_offer(self, key, expected):
+        with open("./tests/test_config.json", "r") as f:
+            response_json = json.load(f)
+
+        entity_model = models.EntityModel(**response_json)
+        yaml_config = entity_model._get_yaml_from_entity()
+        assert yaml_config["offer"][key] == expected
+
+    def test_entity_to_yaml_offer(self, key, expected):
+        with open("./tests/test_config.json", "r") as f:
+            response_json = json.load(f)
+
+        entity_model = models.EntityModel(**response_json)
+        yaml_config = entity_model._get_yaml_from_entity()
+        assert yaml_config["offer"][key] == expected
