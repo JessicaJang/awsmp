@@ -29,7 +29,7 @@ from pydantic import (
 )
 
 from .constants import CATEGORIES
-
+from .yaml_utils import LiteralString
 
 class InstanceTypePricing(BaseModel):
     name: str
@@ -138,79 +138,6 @@ class Offer(BaseModel):
             return AmiProductPricingType.HOURLY_WITH_MONTHLY_SUBSCRIPTION_FEE
         else:
             return AmiProductPricingType.HOURLY
-
-    @model_validator(mode="after")
-    def check_pricing_type_alignment(cls, offer):
-        """
-        ensures instance types cannot have pricing set in a way that leaves
-        ambiguity on if the configuration is intended to be one of:
-
-        1. hourly
-        2. hourly + annual
-        3. hourly + monthly sub
-
-        :param Offer offer: current offer to validate
-        """
-        if offer.monthly_subscription_fee is not None:
-            cls._raise_on_missing_monthly_subscription_fields(offer)
-        else:
-            cls._raise_on_hourly_yearly_mismatch(offer)
-        return offer
-
-    @classmethod
-    def _raise_on_missing_monthly_subscription_fields(cls, offer: Offer):
-        misconfigured = "\n".join({i.name for i in offer.instance_types if i.price_annual is not None})
-        if misconfigured:
-            error_message = f"""Offer has monthly_subscription_fee but some instances have yearly key:
-                {misconfigured}
-                """
-            raise ValueError(error_message)
-
-    @classmethod
-    def _raise_on_hourly_yearly_mismatch(cls, offer: Offer):
-        yearly_count = 0
-        hourly_count = 0
-        hourly = set()
-        yearly = set()
-        all_types = set()
-        for i in offer.instance_types:
-            all_types.add(i.name)
-            if i.price_annual is not None:
-                yearly.add(i.name)
-                yearly_count += 1
-            if i.price_hourly is not None:
-                hourly.add(i.name)
-                hourly_count += 1
-
-        if yearly_count != 0 and yearly_count < hourly_count:
-            missing = "\n".join(all_types - yearly)
-            raise ValueError(
-                f"""Offer has at least one yearly price but some instances are missing yearly key:
-                {missing}
-                """
-            )
-        elif hourly_count < yearly_count:
-            missing = "\n".join(all_types - hourly)
-            raise ValueError(
-                f"""Offer has at least one yearly price but some instances are missing yearly key:
-                {missing}
-                """
-            )
-
-    @model_validator(mode="after")
-    def ensure_pricing_ordering_enforced(cls, offer):
-        def hourly_greater_than_annual(i: InstanceTypePricing):
-            return i.price_annual and (i.price_hourly > i.price_annual)
-
-        misconfigured_hourly = "\n".join(i.name for i in offer.instance_types if hourly_greater_than_annual(i))
-        error = ""
-        if misconfigured_hourly:
-            error += "Hourly pricing cannot be greater than yearly pricing. Misconfigured instance types: {misconfigured_hourly}"
-
-        if error:
-            raise ValueError(error)
-
-        return offer
 
 
 class Region(BaseModel):
@@ -363,6 +290,23 @@ class DescriptionModel(BaseModel):
     SearchKeywords: List[str]
     Categories: List[str]
 
+    def _to_yaml(self) -> dict[str, Any]:
+        """
+        Return dictionary of description information with local configuration format.
+        
+        :return: Dictionary of description information
+        :rtype: dict[str, Any]
+        """
+        return {
+            "product_title": self.ProductTitle,
+            "short_description": LiteralString(self.ShortDescription),
+            "long_description": LiteralString(self.LongDescription),
+            "sku": self.Sku,
+            "highlights": self.Highlights,
+            "search_keywords": self.SearchKeywords,
+            "categories": self.Categories,
+        }
+
 
 class PromotionalResourcesModel(BaseModel):
     """
@@ -381,13 +325,22 @@ class PromotionalResourcesModel(BaseModel):
         # needs to be converted to an HttpUrl and then back to string format.
         return [{"Text": resource["Text"], "Url": str(HttpUrl(resource["Url"]))} for resource in value]
 
-    @field_validator("Videos")
-    def videos_validator(cls, value) -> List:
-        # The Ami class takes url as HttpUrl and converts it to string format for API request.
-        # And HttpUrl adds a trailing slash to the end of a URL.
-        # To compare values correctly, the link value from entity's Videos field also
-        # needs to be converted to an HttpUrl and then back to string format.
-        return [HttpUrl(value[0]["Url"])] if value else []
+    def _to_yaml(self) -> dict[str, Any]:
+        """
+        Return dictionary of promotional resource information with local configuration format.
+        
+        :return: Dictionary of promotional resource information
+        :rtype: dict[str, Any]
+        """
+        resources = []
+        for resource in self.AdditionalResources:
+            resources.append({resource["Text"]: resource["Url"]})
+
+        video = []
+        if len(self.Videos):
+            video.append(self.Videos[0]["Url"])
+
+        return {"logo_url": str(self.LogoUrl), "video_urls": video, "additional_resources": resources}
 
 
 class SupportInformationModel(BaseModel):
@@ -398,6 +351,15 @@ class SupportInformationModel(BaseModel):
     Description: str
     Resources: List[str]
 
+    def _to_yaml(self) -> dict[str, Any]:
+        """
+        Return dictionary of support information with local configuration format.
+        
+        :return: Dictionary of support information
+        :rtype: dict[str, Any]
+        """
+        return {"support_description": LiteralString(self.Description), "support_resources": self.Resources}
+
 
 class RegionAvailabilityModel(BaseModel):
     """
@@ -406,6 +368,16 @@ class RegionAvailabilityModel(BaseModel):
 
     Regions: List[str]
     FutureRegionSupport: str
+
+    def _to_yaml(self) -> dict[str, Any]:
+        """
+        Return dictionary of region availability with local configuration format.
+        
+        :return: Dictionary of region availability information
+        :rtype: dict[str, Any]
+        """
+        future_region_support = True if self.FutureRegionSupport == "All" else False
+        return {"commercial_regions": self.Regions, "future_region_support": future_region_support}
 
 
 class SupportTermModel(BaseModel):
@@ -464,6 +436,143 @@ class PricingTermModel(BaseModel):
     RateCards: List[RateCardItemsModel]
 
 
+class OperatingSystemModel(BaseModel):
+    """
+    Model for Operating system
+    """
+
+    Name: str
+    Version: str
+    Username: str
+    ScanningPort: int
+
+    def _to_yaml(self) -> dict[str, Any]:
+        """
+        Return dictionary of operating system with local configuration format.
+        
+        :return: Dictionary of operating system information
+        :rtype: dict[str, Any]
+        """
+        return {
+            "os_system_name": self.Name,
+            "os_user_name": self.Username,
+            "os_system_version": self.Version,
+            "scanning_port": self.ScanningPort,
+        }
+
+
+class SourcesModel(BaseModel):
+    """
+    Model for sources
+    """
+
+    Image: str
+    OperatingSystem: OperatingSystemModel
+
+    def _to_yaml(self) -> dict[str, Any]:
+        """
+        Return dictionary of source information with local configuration format.
+        
+        :return: Dictionary of source information
+        :rtype: dict[str, Any]
+        """
+        return {**{"ami_id": self.Image}, **self.OperatingSystem._to_yaml()}
+
+
+class SecurityGroupsModel(BaseModel):
+    """
+    Model for security groups
+    """
+
+    Protocol: Literal["tcp", "udp"]
+    FromPort: int
+    ToPort: int
+    CidrIps: List[str]
+
+    def _to_yaml(self) -> dict[str, Any]:
+        """
+        Return dictionary of security group information with local configuration format.
+        
+        :return: Dictionary of security group information
+        :rtype: dict[str, Any]
+        """
+        return {
+            "ip_protocol": self.Protocol,
+            "ip_ranges": self.CidrIps,
+            "from_port": self.FromPort,
+            "to_port": self.ToPort,
+        }
+
+
+class RecommendationsModel(BaseModel):
+    """
+    Model for recommendations
+    """
+
+    SecurityGroups: List[SecurityGroupsModel]
+    InstanceType: str
+
+    def _to_yaml(self) -> dict[str, Any]:
+        """
+        Return dictionary of version information with local configuration format.
+
+        Local config file only have the initial security group information of the version
+        
+        :return: Dictionary of recommendation information 
+        :rtype: dict[str, Any]
+        """
+        return {**{"recommended_instance_types": self.InstanceType}, **self.SecurityGroups[0]._to_yaml()}
+
+
+class DeliveryMethodsModel(BaseModel):
+    """
+    Model for delivery method
+    """
+
+    Instructions: dict[str, str]
+    Recommendations: RecommendationsModel
+
+    def _to_yaml(self) -> dict[str, Any]:
+        """
+        Return dictionary of delivery method information with local configuration format.
+
+        :return: Dictionary of version information
+        :rtype: dict[str, Any]
+        """
+        return {**{"usage_instructions": LiteralString(self.Instructions["Usage"])}, **self.Recommendations._to_yaml()}
+
+
+class VersionModel(BaseModel):
+    """
+    Model for version from entity details
+    """
+
+    VersionTitle: str
+    ReleaseNotes: str
+    Sources: List[SourcesModel]
+    DeliveryMethods: List[DeliveryMethodsModel]
+
+    def _to_yaml(self) -> dict[str, Any]:
+        """
+        Return dictionary of version information with local configuration format.
+
+        Only first sources and delivery method will be returned for the version.
+
+        :return: Dictionary of version information
+        :rtype: dict[str, Any]
+        """
+        sources = self.Sources[0]._to_yaml()
+        delivery_methods = self.DeliveryMethods[0]._to_yaml()
+
+        return {
+            "version": {
+                **{"version_title": self.VersionTitle, "release_notes": LiteralString(self.ReleaseNotes), "access_role_arn": ""},
+                **self.DeliveryMethods[0]._to_yaml(),
+                **self.Sources[0]._to_yaml(),
+            }
+        }
+
+
 class DiffAddedModel(BaseModel):
     """
     Model for fields that have been added in a diff comparison
@@ -514,7 +623,39 @@ class EntityModel(BaseModel):
     PromotionalResources: PromotionalResourcesModel
     SupportInformation: SupportInformationModel
     RegionAvailability: RegionAvailabilityModel
+    Versions: VersionModel
     Terms: List[Annotated[Union[SupportTermModel, PricingTermModel], Field(discriminator="Type")]]
+
+    def _convert_terms_to_yaml(self) -> dict[str, Any]:
+        """
+        Convert terms JSON format to YAML config format
+        """
+        yaml_config = {}
+        hourly, yearly = {}, {}
+        pricings: List[dict] = []
+
+        for term in self.Terms:
+            if term.Type == "SupportTerm":
+                yaml_config["refund_policy"] = LiteralString(term.RefundPolicy)
+            else:
+                # Pricing term
+                if term.Type == "UsageBasedPricingTerm":
+                    for card in term.RateCards[0].RateCard:
+                        hourly[card.DimensionKey] = card.Price
+                if term.Type == "ConfigurableUpfrontPricingTerm":
+                    for card in term.RateCards[0].RateCard:
+                        yearly[card.DimensionKey] = card.Price
+
+        for key in hourly:
+            pricing = {"name": key, "hourly": hourly[key]}
+            if key in yearly:
+                pricing["yearly"] = yearly[key]
+            pricings.append(pricing)
+        yaml_config["instance_types"] = pricings
+
+        yaml_config["eula_document"] = [{"type": ""}]
+
+        return yaml_config
 
     @staticmethod
     def get_entity(response: dict[str, Any]) -> EntityModel:
@@ -599,6 +740,29 @@ class EntityModel(BaseModel):
             )
 
         return EntityModel(**yaml_to_api_response)
+
+    def _get_yaml_from_entity(self) -> dict[str, Any]:
+        """
+        Convert a entity object to yaml config
+
+        :return: Dictionary of local configuration information
+        :rtype: dcit[str, Any]
+        """
+        description_configs = {
+            **self.Description._to_yaml(),
+            **self.PromotionalResources._to_yaml(),
+            **self.SupportInformation._to_yaml(),
+        }
+        config = {
+            "product": {
+                "description": description_configs,
+                "region": self.RegionAvailability._to_yaml(),
+                "version": self.Versions._to_yaml()
+            },
+            "offer": self._convert_terms_to_yaml(),
+        }
+
+        return config
 
     @staticmethod
     def is_changed(name: str, value1: Any, value2: Any) -> bool:
@@ -735,6 +899,7 @@ class EntityModel(BaseModel):
         :rtype DiffModel
         """
         non_dict_fields = ["Terms"]  # Terms contain different offer details with list format
+        skip_fields = ["Versions"]
         diff_added: List[DiffAddedModel] = []
         diff_removed: List[DiffRemovedModel] = []
         diff_changed: List[DiffChangedModel] = []
@@ -746,6 +911,8 @@ class EntityModel(BaseModel):
         entity_model = self.model_dump()
 
         for entity_key, entity_value in local_entity.model_dump().items():
+            if entity_key in skip_fields:
+                continue
             if entity_key not in non_dict_fields:
                 for model_key, model_value in entity_value.items():
                     EntityModel._add_diff(
